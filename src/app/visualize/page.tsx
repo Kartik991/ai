@@ -27,10 +27,13 @@ import {
   CheckCircle2,
   AlertTriangle,
   Zap,
+  GitBranch,
+  Flame,
 } from 'lucide-react';
 import { useTimetableStore } from '@/stores/use-timetable-store';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, Button, Badge } from '@/components/ui';
 import { CspTreeNodeComponent } from '@/components/visualization/CspTreeNode';
+import { MinConflictsVisualizer } from '@/components/visualization/MinConflictsVisualizer';
 import { buildReactFlowTree } from '@/algorithms/visualization/search-tree-builder';
 import { solveTimetableCSP, generateLectureSessions } from '@/algorithms/csp/backtracking';
 import { DAYS } from '@/data/demo-data';
@@ -50,8 +53,13 @@ export default function VisualizePage() {
     softPreferences,
     traceEvents,
     treeNodes,
+    selectedAlgorithm,
     setSolverResult,
   } = useTimetableStore();
+
+  const [activeMode, setActiveMode] = useState<'backtracking' | 'min-conflicts'>(
+    selectedAlgorithm === 'min-conflicts' ? 'min-conflicts' : 'backtracking'
+  );
 
   // Playback state
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
@@ -165,18 +173,18 @@ export default function VisualizePage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-              CSP Search Tree Visualizer
+              Algorithm Execution Visualizer
             </h1>
             <Badge variant="purple" className="font-semibold text-xs">
               Live Event Trace Replay
             </Badge>
           </div>
           <p className="text-sm text-slate-500 mt-1">
-            Observe the recursive Backtracking CSP algorithm as it explores variables, prunes domains via Forward Checking, encounters conflicts, and backtracks.
+            Observe the step-by-step decision dynamics of university timetable scheduling algorithms: systematic CSP tree search vs stochastic local repair.
           </p>
         </div>
 
-        {totalSteps === 0 && (
+        {activeMode === 'backtracking' && totalSteps === 0 && (
           <Button onClick={handleAutoRun} className="sm:self-end">
             <Sparkles className="w-4 h-4 mr-2" />
             Generate & Trace Execution
@@ -184,7 +192,35 @@ export default function VisualizePage() {
         )}
       </div>
 
-      {totalSteps === 0 ? (
+      {/* Algorithm Mode Switcher */}
+      <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
+        <button
+          onClick={() => setActiveMode('backtracking')}
+          className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+            activeMode === 'backtracking'
+              ? 'bg-blue-600 text-white shadow-xs'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          <GitBranch className="w-3.5 h-3.5" />
+          Backtracking Search Tree (Phase 1)
+        </button>
+        <button
+          onClick={() => setActiveMode('min-conflicts')}
+          className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+            activeMode === 'min-conflicts'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+          }`}
+        >
+          <Flame className="w-3.5 h-3.5" />
+          Min-Conflicts Local Repair (Phase 2)
+        </button>
+      </div>
+
+      {activeMode === 'min-conflicts' ? (
+        <MinConflictsVisualizer />
+      ) : totalSteps === 0 ? (
         <Card className="py-16 text-center">
           <CardContent className="space-y-4 max-w-md mx-auto">
             <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 mx-auto flex items-center justify-center">

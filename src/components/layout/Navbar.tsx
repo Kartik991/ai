@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   FileCode,
   Sparkles,
+  Scale,
 } from 'lucide-react';
 import { useTimetableStore } from '@/stores/use-timetable-store';
 import { Button, Modal, Badge } from '@/components/ui';
@@ -48,7 +49,8 @@ export function Navbar() {
     { href: '/data-management', label: 'Academic Data', icon: Database },
     { href: '/constraints', label: 'Constraints', icon: Sliders },
     { href: '/generate', label: 'Generate', icon: PlayCircle },
-    { href: '/visualize', label: 'Search Tree Visualizer', icon: Network },
+    { href: '/compare', label: 'Compare', icon: Scale },
+    { href: '/visualize', label: 'Visualizer', icon: Network },
     { href: '/learn', label: 'Learning Center', icon: BookOpen },
   ];
 
@@ -92,7 +94,7 @@ export function Navbar() {
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-slate-900 tracking-tight text-lg">IntelliSched</span>
                   <Badge variant="purple" className="text-[10px] py-0 px-1.5 font-semibold">
-                    Phase 1: CSP
+                    Phase 2: Min-Conflicts
                   </Badge>
                 </div>
                 <span className="text-[11px] text-slate-500 font-medium">University Timetable Generator</span>

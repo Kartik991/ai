@@ -19,6 +19,15 @@ import { selectUnassignedVariable, calculateDegree } from '../src/algorithms/csp
 import { orderDomainValues } from '../src/algorithms/csp/value-ordering.ts';
 import { forwardCheck } from '../src/algorithms/csp/forward-checking.ts';
 import { solveTimetableCSP, generateLectureSessions } from '../src/algorithms/csp/backtracking.ts';
+import { SeededPRNG } from '../src/algorithms/optimization/prng.ts';
+import { generateInitialAssignment, getUnaryFilteredDomain } from '../src/algorithms/optimization/initial-assignment.ts';
+import {
+  getAllConflictingVariables,
+  countTotalHardConflicts,
+  evaluateCandidateValue,
+} from '../src/algorithms/optimization/conflict-evaluator.ts';
+import { RestartManager } from '../src/algorithms/optimization/restart-manager.ts';
+import { solveTimetableMinConflicts } from '../src/algorithms/optimization/min-conflicts.ts';
 import {
   DEMO_SUBJECTS,
   DEMO_PROFESSORS,
@@ -602,6 +611,246 @@ runTest('Time Slot Control: Excludes disabled slots and disabled days from gener
   // Ensure NO assignment was scheduled on Friday
   const fridayAssignments = result.timetable.assignments.filter((a) => a.day === 'Friday');
   assert.strictEqual(fridayAssignments.length, 0, 'No lecture session may be placed on a disabled day');
+});
+
+// ============================================================================
+// PHASE 2: Min-Conflicts Algorithm Tests
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Test 16: Initial Complete Assignment Generation
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Generates a complete initial assignment for all variables', () => {
+  const variables = generateLectureSessions(DEMO_SUBJECTS, DEMO_BATCHES.slice(0, 1), DEMO_PROFESSORS);
+  const prng = new SeededPRNG(42);
+
+  const initial = generateInitialAssignment(
+    variables,
+    DEMO_CLASSROOMS,
+    DEMO_TIME_SLOTS,
+    DEMO_PROFESSORS,
+    DEMO_BATCHES.slice(0, 1),
+    DEFAULT_HARD_CONSTRAINTS,
+    'random',
+    prng
+  );
+
+  assert.strictEqual(initial.length, variables.length, 'Every variable must be assigned in initial complete state');
+  const assignedIds = new Set(initial.map((a) => a.variableId));
+  for (const v of variables) {
+    assert.ok(assignedIds.has(v.id), `Variable ${v.id} must be assigned`);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// Test 17: Conflicting Variable Detection
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Accurately detects variables participating in conflicts', () => {
+  const v1: LectureSession = { id: 'v1', subjectId: 's1', batchId: 'b1', professorId: 'prof-A', sessionIndex: 1, requiredRoomType: 'lecture_hall', requiredCapacity: 30, label: 'V1' };
+  const v2: LectureSession = { id: 'v2', subjectId: 's2', batchId: 'b2', professorId: 'prof-A', sessionIndex: 1, requiredRoomType: 'lecture_hall', requiredCapacity: 30, label: 'V2' };
+  const v3: LectureSession = { id: 'v3', subjectId: 's3', batchId: 'b3', professorId: 'prof-B', sessionIndex: 1, requiredRoomType: 'lecture_hall', requiredCapacity: 30, label: 'V3' };
+
+  // v1 and v2 share professor prof-A and assigned to same day+slot -> conflict!
+  // v3 is assigned to a different day/slot -> clean!
+  const assignments: TimetableAssignment[] = [
+    { variableId: 'v1', subjectId: 's1', batchId: 'b1', professorId: 'prof-A', day: 'Monday', slotId: 'mon-slot-1', classroomId: 'room-lh-101' },
+    { variableId: 'v2', subjectId: 's2', batchId: 'b2', professorId: 'prof-A', day: 'Monday', slotId: 'mon-slot-1', classroomId: 'room-lh-102' },
+    { variableId: 'v3', subjectId: 's3', batchId: 'b3', professorId: 'prof-B', day: 'Tuesday', slotId: 'tue-slot-1', classroomId: 'room-lh-101' },
+  ];
+
+  const context = {
+    variables: new Map([['v1', v1], ['v2', v2], ['v3', v3]]),
+    professors: new Map(DEMO_PROFESSORS.map((p) => [p.id, p])),
+    batches: new Map(DEMO_BATCHES.map((b) => [b.id, b])),
+    classrooms: new Map(DEMO_CLASSROOMS.map((c) => [c.id, c])),
+    timeSlots: new Map(DEMO_TIME_SLOTS.map((s) => [s.id, s])),
+    config: DEFAULT_HARD_CONSTRAINTS,
+  };
+
+  const conflictingIds = getAllConflictingVariables([v1, v2, v3], assignments, context);
+  assert.strictEqual(conflictingIds.length, 2, 'Exactly 2 variables should be in conflict');
+  assert.ok(conflictingIds.includes('v1'));
+  assert.ok(conflictingIds.includes('v2'));
+  assert.ok(!conflictingIds.includes('v3'), 'v3 should not be marked as conflicting');
+});
+
+// ----------------------------------------------------------------------------
+// Test 18: Local Conflict Score Calculation
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Evaluates candidate value local conflicts excluding unrelated clashes', () => {
+  const vTarget: LectureSession = { id: 'vt', subjectId: 'st', batchId: 'bt', professorId: 'prof-X', sessionIndex: 1, requiredRoomType: 'lecture_hall', requiredCapacity: 30, label: 'VT' };
+  const vOther1: LectureSession = { id: 'vo1', subjectId: 'so1', batchId: 'bo1', professorId: 'prof-Y', sessionIndex: 1, requiredRoomType: 'lecture_hall', requiredCapacity: 30, label: 'VO1' };
+  const vOther2: LectureSession = { id: 'vo2', subjectId: 'so2', batchId: 'bo2', professorId: 'prof-Y', sessionIndex: 1, requiredRoomType: 'lecture_hall', requiredCapacity: 30, label: 'VO2' };
+
+  // vo1 and vo2 conflict with each other at Wednesday slot-1
+  const existingOtherAssignments: TimetableAssignment[] = [
+    { variableId: 'vo1', subjectId: 'so1', batchId: 'bo1', professorId: 'prof-Y', day: 'Wednesday', slotId: 'wed-slot-1', classroomId: 'room-lh-101' },
+    { variableId: 'vo2', subjectId: 'so2', batchId: 'bo2', professorId: 'prof-Y', day: 'Wednesday', slotId: 'wed-slot-1', classroomId: 'room-lh-102' },
+  ];
+
+  const context = {
+    variables: new Map([['vt', vTarget], ['vo1', vOther1], ['vo2', vOther2]]),
+    professors: new Map(DEMO_PROFESSORS.map((p) => [p.id, p])),
+    batches: new Map(DEMO_BATCHES.map((b) => [b.id, b])),
+    classrooms: new Map(DEMO_CLASSROOMS.map((c) => [c.id, c])),
+    timeSlots: new Map(DEMO_TIME_SLOTS.map((s) => [s.id, s])),
+    config: DEFAULT_HARD_CONSTRAINTS,
+  };
+
+  // If vTarget chooses Monday slot-1 (where neither vo1 nor vo2 exist), its local conflict score must be 0!
+  const cleanVal: DomainValue = { day: 'Monday', slotId: 'mon-slot-1', classroomId: 'room-lh-101' };
+  const cleanEval = evaluateCandidateValue(vTarget, cleanVal, existingOtherAssignments, context);
+  assert.strictEqual(cleanEval.conflictScore, 0, 'Local score should be 0 for conflict-free choice');
+
+  // If vTarget chooses Wednesday slot-1 in room-lh-101, it clashes with vo1 (classroom clash) -> score: 1
+  const clashingVal: DomainValue = { day: 'Wednesday', slotId: 'wed-slot-1', classroomId: 'room-lh-101' };
+  const clashEval = evaluateCandidateValue(vTarget, clashingVal, existingOtherAssignments, context);
+  assert.strictEqual(clashEval.conflictScore, 1, 'Local score should be 1 for classroom conflict');
+});
+
+// ----------------------------------------------------------------------------
+// Test 19: Seeded Deterministic Execution
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Seeded PRNG produces deterministic, repeatable execution trajectories', () => {
+  const prng1 = new SeededPRNG(12345);
+  const prng2 = new SeededPRNG(12345);
+
+  const seq1 = [prng1.next(), prng1.nextInt(1, 100), prng1.choice(['A', 'B', 'C', 'D'])];
+  const seq2 = [prng2.next(), prng2.nextInt(1, 100), prng2.choice(['A', 'B', 'C', 'D'])];
+
+  assert.deepStrictEqual(seq1, seq2, 'Identical seed must produce identical pseudo-random outputs');
+});
+
+// ----------------------------------------------------------------------------
+// Test 20: Stagnation Detection & Restart Manager
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Stagnation detection triggers restart within limits', () => {
+  const manager = new RestartManager(2, 3); // max 2 restarts, stagnation after 3 stalled iterations
+  const dummyAssignment: TimetableAssignment[] = [];
+
+  // Start with 5 conflicts
+  manager.recordState(5, dummyAssignment);
+  assert.strictEqual(manager.isStagnated(), false);
+
+  // 3 iterations without improvement
+  manager.recordState(5, dummyAssignment);
+  manager.recordState(5, dummyAssignment);
+  manager.recordState(5, dummyAssignment);
+
+  assert.strictEqual(manager.isStagnated(), true, 'Must detect stagnation after threshold');
+  assert.strictEqual(manager.canRestart(), true);
+
+  const { restartCount } = manager.triggerRestart();
+  assert.strictEqual(restartCount, 1);
+  assert.strictEqual(manager.isStagnated(), false, 'Stagnation resets on restart');
+
+  // Exhaust second restart
+  manager.recordState(5, dummyAssignment);
+  manager.recordState(5, dummyAssignment);
+  manager.recordState(5, dummyAssignment);
+  manager.triggerRestart();
+
+  assert.strictEqual(manager.canRestart(), false, 'Cannot restart when limit reached');
+});
+
+// ----------------------------------------------------------------------------
+// Test 21: Successful Min-Conflicts Timetable Generation
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Solves timetable and passes independent validation', () => {
+  const variables = generateLectureSessions(DEMO_SUBJECTS, DEMO_BATCHES.slice(0, 1), DEMO_PROFESSORS);
+
+  const result = solveTimetableMinConflicts(
+    variables,
+    DEMO_PROFESSORS,
+    DEMO_BATCHES.slice(0, 1),
+    DEMO_CLASSROOMS,
+    DEMO_TIME_SLOTS,
+    DEFAULT_HARD_CONSTRAINTS,
+    DEFAULT_SOFT_PREFERENCES,
+    {
+      maxIterations: 1000,
+      maxRestarts: 3,
+      stagnationThreshold: 50,
+      randomSeed: 999,
+      initStrategy: 'greedy',
+      optimizeSoftPreferences: false,
+      timeLimitMs: 15000,
+      recordTrace: true,
+    }
+  );
+
+  assert.strictEqual(result.success, true, 'Min-conflicts should solve single-batch timetable');
+  assert.ok(result.timetable !== null);
+  assert.strictEqual(result.remainingConflicts, 0, 'Remaining conflicts must be 0');
+  assert.strictEqual(result.timetable.validation.isValid, true, 'Independent validator must mark timetable valid');
+  assert.strictEqual(result.timetable.validation.hardViolations.length, 0);
+  assert.strictEqual(result.timetable.assignments.length, variables.length);
+  assert.ok(result.recorder.getEvents().length > 0, 'Trace events must be recorded');
+});
+
+// ----------------------------------------------------------------------------
+// Test 22: Unsuccessful Termination & Best Candidate on Overconstrained Problem
+// ----------------------------------------------------------------------------
+runTest('Min-Conflicts: Terminates with failure status and best candidate on impossible problem', () => {
+  const singleSlot: TimeSlot[] = [
+    { id: 'only-slot', day: 'Monday', startTime: '09:00', endTime: '10:00', isBreak: false, label: 'Mon 9-10' },
+  ];
+  const singleRoom: Classroom[] = [
+    { id: 'only-room', name: 'Room 1', capacity: 50, roomType: 'lecture_hall', building: 'Block A' },
+  ];
+  const subject: Subject = {
+    id: 's-over',
+    code: 'OVER1',
+    name: 'Overconstrained',
+    weeklyLectures: 3, // 3 sessions for 1 slot
+    requiredRoomType: 'lecture_hall',
+    requiredCapacity: 30,
+  };
+  const prof: Professor = {
+    id: 'p-over',
+    name: 'Dr. Over',
+    email: 'over@uni.edu',
+    department: 'CS',
+    assignedSubjectIds: ['s-over'],
+    availableSlots: [{ day: 'Monday', slotId: 'only-slot' }],
+    preferredSlots: [],
+  };
+  const batch: Batch = {
+    id: 'b-over',
+    name: 'Batch Over',
+    section: 'A',
+    studentCount: 30,
+    program: 'CS',
+    subjectIds: ['s-over'],
+  };
+
+  const variables = generateLectureSessions([subject], [batch], [prof]);
+
+  const result = solveTimetableMinConflicts(
+    variables,
+    [prof],
+    [batch],
+    singleRoom,
+    singleSlot,
+    DEFAULT_HARD_CONSTRAINTS,
+    DEFAULT_SOFT_PREFERENCES,
+    {
+      maxIterations: 50, // low iteration limit
+      maxRestarts: 1,
+      stagnationThreshold: 10,
+      randomSeed: 42,
+      initStrategy: 'random',
+      optimizeSoftPreferences: false,
+      timeLimitMs: 5000,
+      recordTrace: true,
+    }
+  );
+
+  assert.strictEqual(result.success, false, 'Min-Conflicts must fail on impossible problem');
+  assert.strictEqual(result.timetable, null, 'No valid timetable should be returned');
+  assert.ok(result.remainingConflicts > 0, 'Must report remaining conflicts');
+  assert.ok(result.bestAssignment.length === variables.length, 'Best candidate assignment should be returned');
+  assert.ok(result.failureReason !== undefined);
 });
 
 console.log('\n====================================================');

@@ -146,9 +146,11 @@ export function solveTimetableCSP(
         name: 'Empty Timetable',
         createdAt: new Date().toISOString(),
         batchIds: [],
+        algorithmUsed: 'backtracking',
         assignments: [],
         validation: { isValid: true, hardViolations: [], softViolations: [], softScore: 100 },
         metrics,
+        backtrackingMetrics: metrics,
       },
       metrics,
       recorder,
@@ -516,9 +518,11 @@ export function solveTimetableCSP(
       name: `Timetable ${new Date().toLocaleDateString()}`,
       createdAt: new Date().toISOString(),
       batchIds: Array.from(new Set(variables.map((v) => v.batchId))),
+      algorithmUsed: 'backtracking',
       assignments: currentAssignments,
       validation,
       metrics,
+      backtrackingMetrics: metrics,
     };
 
     return {

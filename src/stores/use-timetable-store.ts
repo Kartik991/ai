@@ -14,6 +14,11 @@ import {
   TraceEvent,
   SearchTreeNode,
   DayOfWeek,
+  AlgorithmType,
+  MinConflictsMetrics,
+  MinConflictsOptions,
+  MinConflictsTraceEvent,
+  AlgorithmComparisonResult,
 } from '@/types';
 import {
   DEMO_SUBJECTS,
@@ -47,6 +52,13 @@ export interface AppState {
   // Visualization Trace
   traceEvents: TraceEvent[];
   treeNodes: SearchTreeNode[];
+  minConflictsTraceEvents: MinConflictsTraceEvent[];
+
+  // Algorithm Selection & Phase 2 Options
+  selectedAlgorithm: AlgorithmType;
+  minConflictsOptions: MinConflictsOptions;
+  lastMinConflictsMetrics: MinConflictsMetrics | null;
+  comparisonResult: AlgorithmComparisonResult | null;
 
   // Status
   isGenerating: boolean;
@@ -94,6 +106,16 @@ export interface AppState {
   setHardConstraints: (config: Partial<HardConstraintConfig>) => void;
   setSoftPreferences: (config: Partial<SoftPreferenceConfig>) => void;
 
+  setSelectedAlgorithm: (algo: AlgorithmType) => void;
+  setMinConflictsOptions: (opts: Partial<MinConflictsOptions>) => void;
+  setComparisonResult: (result: AlgorithmComparisonResult | null) => void;
+  setMinConflictsResult: (params: {
+    timetable: Timetable | null;
+    metrics: MinConflictsMetrics;
+    traceEvents: MinConflictsTraceEvent[];
+    failureReason?: string;
+  }) => void;
+
   // Solver execution results
   setIsGenerating: (isGenerating: boolean) => void;
   setSolverResult: (params: {
@@ -121,6 +143,20 @@ export const useTimetableStore = create<AppState>((set, get) => ({
   lastFailureReason: null,
   traceEvents: [],
   treeNodes: [],
+  minConflictsTraceEvents: [],
+  selectedAlgorithm: 'backtracking',
+  minConflictsOptions: {
+    maxIterations: 1000,
+    maxRestarts: 3,
+    stagnationThreshold: 50,
+    randomSeed: 42,
+    initStrategy: 'greedy',
+    optimizeSoftPreferences: false,
+    timeLimitMs: 15000,
+    recordTrace: true,
+  },
+  lastMinConflictsMetrics: null,
+  comparisonResult: null,
   isGenerating: false,
   hasHydrated: false,
   activePresetId: 'preset-standard',
@@ -453,6 +489,30 @@ export const useTimetableStore = create<AppState>((set, get) => ({
       const updated = { ...state.softPreferences, ...updates };
       saveToLocalStorage({ ...state, softPreferences: updated });
       return { softPreferences: updated };
+    });
+  },
+
+  setSelectedAlgorithm: (selectedAlgorithm) => set({ selectedAlgorithm }),
+
+  setMinConflictsOptions: (opts) =>
+    set((state) => ({ minConflictsOptions: { ...state.minConflictsOptions, ...opts } })),
+
+  setComparisonResult: (comparisonResult) => set({ comparisonResult }),
+
+  setMinConflictsResult: ({ timetable, metrics, traceEvents, failureReason }) => {
+    set((state) => {
+      const savedTimetables = timetable ? [timetable, ...state.savedTimetables.slice(0, 4)] : state.savedTimetables;
+      const newState = {
+        currentTimetable: timetable,
+        savedTimetables,
+        lastMetrics: null,
+        lastMinConflictsMetrics: metrics,
+        lastFailureReason: failureReason || null,
+        minConflictsTraceEvents: traceEvents,
+        isGenerating: false,
+      };
+      saveToLocalStorage({ ...state, ...newState });
+      return newState;
     });
   },
 

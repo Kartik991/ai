@@ -33,7 +33,8 @@ import {
   solveTimetableCSP,
   generateLectureSessions,
 } from '@/algorithms/csp/backtracking';
-import { SolverOptions, DayOfWeek } from '@/types';
+import { solveTimetableMinConflicts } from '@/algorithms/optimization/min-conflicts';
+import { SolverOptions, MinConflictsOptions, DayOfWeek, AlgorithmType } from '@/types';
 import { formatTime } from '@/lib/utils';
 import { DAYS } from '@/data/demo-data';
 
@@ -51,6 +52,11 @@ export default function GeneratePage() {
     isGenerating,
     setIsGenerating,
     setSolverResult,
+    setMinConflictsResult,
+    selectedAlgorithm,
+    setSelectedAlgorithm,
+    minConflictsOptions,
+    setMinConflictsOptions,
   } = useTimetableStore();
 
   // Solver Form Configuration
@@ -61,6 +67,14 @@ export default function GeneratePage() {
   const [useForwardChecking, setUseForwardChecking] = useState(true);
   const [maxSteps, setMaxSteps] = useState(5000);
   const [timeLimitMs, setTimeLimitMs] = useState(15000);
+
+  // Min-Conflicts local state
+  const [mcMaxIterations, setMcMaxIterations] = useState(minConflictsOptions.maxIterations || 1000);
+  const [mcMaxRestarts, setMcMaxRestarts] = useState(minConflictsOptions.maxRestarts || 3);
+  const [mcStagnation, setMcStagnation] = useState(minConflictsOptions.stagnationThreshold || 50);
+  const [mcSeed, setMcSeed] = useState(minConflictsOptions.randomSeed ?? 42);
+  const [mcInitStrategy, setMcInitStrategy] = useState<'greedy' | 'random'>(minConflictsOptions.initStrategy || 'greedy');
+  const [mcOptimizeSoft, setMcOptimizeSoft] = useState(minConflictsOptions.optimizeSoftPreferences || false);
 
   // Calendar Filters
   const [filterBatchId, setFilterBatchId] = useState<string>('all');
@@ -78,35 +92,68 @@ export default function GeneratePage() {
         const batchFilter = targetBatch === 'all' ? undefined : [targetBatch];
         const variables = generateLectureSessions(subjects, batches, professors, batchFilter);
 
-        const options: SolverOptions = {
-          useMRV,
-          useDegreeHeuristic,
-          useLCV,
-          useForwardChecking,
-          maxSteps,
-          timeLimitMs,
-          recordTrace: true,
-          batchIds: batchFilter,
-        };
+        if (selectedAlgorithm === 'min-conflicts') {
+          const mcOpts: MinConflictsOptions = {
+            maxIterations: mcMaxIterations,
+            maxRestarts: mcMaxRestarts,
+            stagnationThreshold: mcStagnation,
+            randomSeed: mcSeed,
+            initStrategy: mcInitStrategy,
+            optimizeSoftPreferences: mcOptimizeSoft,
+            timeLimitMs,
+            recordTrace: true,
+            batchIds: batchFilter,
+          };
+          setMinConflictsOptions(mcOpts);
 
-        const result = solveTimetableCSP(
-          variables,
-          professors,
-          batches,
-          classrooms,
-          timeSlots,
-          hardConstraints,
-          softPreferences,
-          options
-        );
+          const result = solveTimetableMinConflicts(
+            variables,
+            professors,
+            batches,
+            classrooms,
+            timeSlots,
+            hardConstraints,
+            softPreferences,
+            mcOpts
+          );
 
-        setSolverResult({
-          timetable: result.timetable,
-          metrics: result.metrics,
-          traceEvents: result.recorder.getEvents(),
-          treeNodes: result.recorder.getTreeNodes(),
-          failureReason: result.failureReason,
-        });
+          setMinConflictsResult({
+            timetable: result.timetable,
+            metrics: result.metrics,
+            traceEvents: result.recorder.getEvents(),
+            failureReason: result.failureReason,
+          });
+        } else {
+          const options: SolverOptions = {
+            useMRV,
+            useDegreeHeuristic,
+            useLCV,
+            useForwardChecking,
+            maxSteps,
+            timeLimitMs,
+            recordTrace: true,
+            batchIds: batchFilter,
+          };
+
+          const result = solveTimetableCSP(
+            variables,
+            professors,
+            batches,
+            classrooms,
+            timeSlots,
+            hardConstraints,
+            softPreferences,
+            options
+          );
+
+          setSolverResult({
+            timetable: result.timetable,
+            metrics: result.metrics,
+            traceEvents: result.recorder.getEvents(),
+            treeNodes: result.recorder.getTreeNodes(),
+            failureReason: result.failureReason,
+          });
+        }
       } catch (err) {
         console.error('Generation failed:', err);
       } finally {
@@ -221,119 +268,297 @@ export default function GeneratePage() {
       {/* Solver Configuration Panel */}
       <Card className="border-blue-100 bg-gradient-to-b from-white to-blue-50/20">
         <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-blue-600" />
-            CSP Solver Parameters
-          </CardTitle>
-          <CardDescription>
-            Select student cohorts, active heuristics, and computational search thresholds.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            {/* Cohort Scope */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                Target Batch Scope
-              </label>
-              <select
-                value={targetBatch}
-                onChange={(e) => setTargetBatch(e.target.value)}
-                className="w-full text-xs border border-slate-200 rounded-lg p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <CardTitle className="text-base flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-blue-600" />
+                Algorithm & Solver Configuration
+              </CardTitle>
+              <CardDescription>
+                Select between Systematic Backtracking Search (Phase 1) and Min-Conflicts Local Search (Phase 2).
+              </CardDescription>
+            </div>
+
+            {/* Algorithm Selector Switch */}
+            <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-lg border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setSelectedAlgorithm('backtracking')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  selectedAlgorithm === 'backtracking'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
               >
-                <option value="all">All Registered Batches ({batches.length})</option>
-                {batches.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name} ({b.section})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Heuristics toggles */}
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Variable Selection Heuristics
-              </label>
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useMRV}
-                    onChange={(e) => setUseMRV(e.target.checked)}
-                    className="rounded text-blue-600"
-                  />
-                  <span>
-                    <strong>MRV</strong> (Minimum Remaining Values)
-                  </span>
-                </label>
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useDegreeHeuristic}
-                    onChange={(e) => setUseDegreeHeuristic(e.target.checked)}
-                    className="rounded text-blue-600"
-                  />
-                  <span>
-                    <strong>Degree Heuristic</strong> (MRV Tie-Breaker)
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            {/* Value & Pruning */}
-            <div className="space-y-2">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                Value Ordering & Pruning
-              </label>
-              <div className="space-y-1.5">
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useLCV}
-                    onChange={(e) => setUseLCV(e.target.checked)}
-                    className="rounded text-blue-600"
-                  />
-                  <span>
-                    <strong>LCV</strong> (Least Constraining Value)
-                  </span>
-                </label>
-                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={useForwardChecking}
-                    onChange={(e) => setUseForwardChecking(e.target.checked)}
-                    className="rounded text-blue-600"
-                  />
-                  <span>
-                    <strong>Forward Checking</strong> (Domain Pruning)
-                  </span>
-                </label>
-              </div>
-            </div>
-
-            {/* Launch Button & Search Limits */}
-            <div className="flex flex-col justify-end">
-              <Button
-                size="lg"
-                disabled={isGenerating}
-                onClick={handleGenerate}
-                className="w-full bg-blue-600 hover:bg-blue-700 shadow-sm text-sm"
+                Backtracking + MRV
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedAlgorithm('min-conflicts')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  selectedAlgorithm === 'min-conflicts'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
               >
-                {isGenerating ? (
-                  <>
-                    <RotateCw className="w-4 h-4 mr-2 animate-spin" />
-                    Solving CSP Search Tree...
-                  </>
-                ) : (
-                  <>
-                    <PlayCircle className="w-5 h-5 mr-2" />
-                    Start Timetable Generation
-                  </>
-                )}
-              </Button>
+                Min-Conflicts (Local Search)
+              </button>
             </div>
           </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {selectedAlgorithm === 'backtracking' ? (
+            /* Backtracking + MRV Options */
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {/* Cohort Scope */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                  Target Batch Scope
+                </label>
+                <select
+                  value={targetBatch}
+                  onChange={(e) => setTargetBatch(e.target.value)}
+                  className="w-full text-xs border border-slate-200 rounded-lg p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="all">All Registered Batches ({batches.length})</option>
+                  {batches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} ({b.section})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Heuristics toggles */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Variable Selection Heuristics
+                </label>
+                <div className="space-y-1.5">
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useMRV}
+                      onChange={(e) => setUseMRV(e.target.checked)}
+                      className="rounded text-blue-600"
+                    />
+                    <span>
+                      <strong>MRV</strong> (Minimum Remaining Values)
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useDegreeHeuristic}
+                      onChange={(e) => setUseDegreeHeuristic(e.target.checked)}
+                      className="rounded text-blue-600"
+                    />
+                    <span>
+                      <strong>Degree Heuristic</strong> (Tie-Breaker)
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Value & Pruning */}
+              <div className="space-y-2">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  Value Ordering & Pruning
+                </label>
+                <div className="space-y-1.5">
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useLCV}
+                      onChange={(e) => setUseLCV(e.target.checked)}
+                      className="rounded text-blue-600"
+                    />
+                    <span>
+                      <strong>LCV</strong> (Least Constraining Value)
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={useForwardChecking}
+                      onChange={(e) => setUseForwardChecking(e.target.checked)}
+                      className="rounded text-blue-600"
+                    />
+                    <span>
+                      <strong>Forward Checking</strong> (Domain Pruning)
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Launch Button */}
+              <div className="flex flex-col justify-end">
+                <Button
+                  size="lg"
+                  disabled={isGenerating}
+                  onClick={handleGenerate}
+                  className="w-full bg-blue-600 hover:bg-blue-700 shadow-sm text-sm"
+                >
+                  {isGenerating ? (
+                    <>
+                      <RotateCw className="w-4 h-4 mr-2 animate-spin" />
+                      Solving Backtracking Tree...
+                    </>
+                  ) : (
+                    <>
+                      <PlayCircle className="w-5 h-5 mr-2" />
+                      Generate with Backtracking
+                    </>
+                  )}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* Min-Conflicts Options */
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {/* Cohort Scope */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Target Batch Scope
+                  </label>
+                  <select
+                    value={targetBatch}
+                    onChange={(e) => setTargetBatch(e.target.value)}
+                    className="w-full text-xs border border-slate-200 rounded-lg p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="all">All Registered Batches ({batches.length})</option>
+                    {batches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.section})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Iterations & Restarts */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Max Iterations: {mcMaxIterations}
+                  </label>
+                  <input
+                    type="range"
+                    min="100"
+                    max="3000"
+                    step="100"
+                    value={mcMaxIterations}
+                    onChange={(e) => setMcMaxIterations(parseInt(e.target.value))}
+                    className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-400 mt-1">
+                    <span>100</span>
+                    <span>1,500</span>
+                    <span>3,000</span>
+                  </div>
+                </div>
+
+                {/* Random Restarts & Stagnation */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Restarts ({mcMaxRestarts}) • Stagnation ({mcStagnation})
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <select
+                      value={mcMaxRestarts}
+                      onChange={(e) => setMcMaxRestarts(parseInt(e.target.value))}
+                      className="text-xs border border-slate-200 rounded-md p-1.5 bg-white"
+                      title="Max Random Restarts"
+                    >
+                      <option value="0">0 Restarts</option>
+                      <option value="2">2 Restarts</option>
+                      <option value="5">5 Restarts</option>
+                      <option value="10">10 Restarts</option>
+                    </select>
+                    <select
+                      value={mcStagnation}
+                      onChange={(e) => setMcStagnation(parseInt(e.target.value))}
+                      className="text-xs border border-slate-200 rounded-md p-1.5 bg-white"
+                      title="Stagnation threshold"
+                    >
+                      <option value="30">30 Steps</option>
+                      <option value="50">50 Steps</option>
+                      <option value="100">100 Steps</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Launch Button */}
+                <div className="flex flex-col justify-end">
+                  <Button
+                    size="lg"
+                    disabled={isGenerating}
+                    onClick={handleGenerate}
+                    className="w-full bg-indigo-600 hover:bg-indigo-700 shadow-sm text-sm"
+                  >
+                    {isGenerating ? (
+                      <>
+                        <RotateCw className="w-4 h-4 mr-2 animate-spin" />
+                        Repairing Conflicts...
+                      </>
+                    ) : (
+                      <>
+                        <PlayCircle className="w-5 h-5 mr-2" />
+                        Generate with Min-Conflicts
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Secondary Options Row */}
+              <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4 text-xs">
+                <div className="flex flex-wrap items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-700">Initial Strategy:</span>
+                    <select
+                      value={mcInitStrategy}
+                      onChange={(e) => setMcInitStrategy(e.target.value as 'greedy' | 'random')}
+                      className="text-xs border border-slate-200 rounded-md px-2 py-1 bg-white font-medium"
+                    >
+                      <option value="greedy">Greedy (Lowest Initial Conflicts)</option>
+                      <option value="random">Random (Uniform Complete Distribution)</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-slate-700">PRNG Seed:</span>
+                    <input
+                      type="number"
+                      value={mcSeed}
+                      onChange={(e) => setMcSeed(parseInt(e.target.value) || 0)}
+                      className="w-20 text-xs border border-slate-200 rounded-md px-2 py-1 bg-white font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setMcSeed(Math.floor(Math.random() * 99999) + 1)}
+                      className="text-[11px] text-indigo-600 hover:underline"
+                    >
+                      Randomize
+                    </button>
+                  </div>
+
+                  <label className="flex items-center gap-1.5 cursor-pointer text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={mcOptimizeSoft}
+                      onChange={(e) => setMcOptimizeSoft(e.target.checked)}
+                      className="rounded text-indigo-600"
+                    />
+                    <span>Optimize Soft Preferences (2nd Stage)</span>
+                  </label>
+                </div>
+
+                <div className="text-[11px] text-slate-500 italic">
+                  Deterministic with fixed seed • Independent complete initialization
+                </div>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -404,44 +629,114 @@ export default function GeneratePage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-6 gap-4 pt-4 text-xs">
-              <div>
-                <span className="text-slate-400 block mb-1">Execution Time</span>
-                <span className="text-lg font-bold font-mono text-emerald-400">
-                  {formatTime(currentTimetable.metrics.executionTimeMs)}
-                </span>
+            {/* Metrics Grid */}
+            {currentTimetable.algorithmUsed === 'min-conflicts' ? (
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-4 pt-4 text-xs">
+                <div>
+                  <span className="text-slate-400 block mb-1">Execution Time</span>
+                  <span className="text-lg font-bold font-mono text-emerald-400">
+                    {formatTime(currentTimetable.metrics.executionTimeMs)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Total Iterations</span>
+                  <span className="text-lg font-bold font-mono text-white">
+                    {('totalIterations' in currentTimetable.metrics
+                      ? currentTimetable.metrics.totalIterations
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Random Restarts</span>
+                  <span className="text-lg font-bold font-mono text-amber-400">
+                    {('totalRestarts' in currentTimetable.metrics
+                      ? currentTimetable.metrics.totalRestarts
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Initial Conflicts</span>
+                  <span className="text-lg font-bold font-mono text-rose-400">
+                    {('initialConflictsCount' in currentTimetable.metrics
+                      ? currentTimetable.metrics.initialConflictsCount
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Repairs / Stagnations</span>
+                  <span className="text-lg font-bold font-mono text-indigo-300">
+                    {('successfulRepairsCount' in currentTimetable.metrics
+                      ? currentTimetable.metrics.successfulRepairsCount
+                      : 0
+                    ).toLocaleString()}{' '}
+                    / {('stagnationEventsCount' in currentTimetable.metrics
+                      ? currentTimetable.metrics.stagnationEventsCount
+                      : 0
+                    )}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Soft Score Compliance</span>
+                  <span className="text-lg font-bold font-mono text-indigo-300">
+                    {currentTimetable.validation.softScore}%
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400 block mb-1">Assignments Attempted</span>
-                <span className="text-lg font-bold font-mono text-white">
-                  {currentTimetable.metrics.assignmentsAttempted.toLocaleString()}
-                </span>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-4 pt-4 text-xs">
+                <div>
+                  <span className="text-slate-400 block mb-1">Execution Time</span>
+                  <span className="text-lg font-bold font-mono text-emerald-400">
+                    {formatTime(currentTimetable.metrics.executionTimeMs)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Assignments Attempted</span>
+                  <span className="text-lg font-bold font-mono text-white">
+                    {('assignmentsAttempted' in currentTimetable.metrics
+                      ? currentTimetable.metrics.assignmentsAttempted
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Backtracks Triggered</span>
+                  <span className="text-lg font-bold font-mono text-amber-400">
+                    {('backtracksCount' in currentTimetable.metrics
+                      ? currentTimetable.metrics.backtracksCount
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Constraint Checks</span>
+                  <span className="text-lg font-bold font-mono text-blue-400">
+                    {('constraintChecksCount' in currentTimetable.metrics
+                      ? currentTimetable.metrics.constraintChecksCount
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Nodes Explored</span>
+                  <span className="text-lg font-bold font-mono text-purple-400">
+                    {('exploredNodesCount' in currentTimetable.metrics
+                      ? currentTimetable.metrics.exploredNodesCount
+                      : 0
+                    ).toLocaleString()}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block mb-1">Soft Score Compliance</span>
+                  <span className="text-lg font-bold font-mono text-indigo-300">
+                    {currentTimetable.validation.softScore}%
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-slate-400 block mb-1">Backtracks Triggered</span>
-                <span className="text-lg font-bold font-mono text-amber-400">
-                  {currentTimetable.metrics.backtracksCount.toLocaleString()}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 block mb-1">Constraint Checks</span>
-                <span className="text-lg font-bold font-mono text-blue-400">
-                  {currentTimetable.metrics.constraintChecksCount.toLocaleString()}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 block mb-1">Nodes Explored</span>
-                <span className="text-lg font-bold font-mono text-purple-400">
-                  {currentTimetable.metrics.exploredNodesCount.toLocaleString()}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-400 block mb-1">Soft Score Compliance</span>
-                <span className="text-lg font-bold font-mono text-indigo-300">
-                  {currentTimetable.validation.softScore}%
-                </span>
-              </div>
-            </div>
+            )}
           </CardContent>
         </Card>
       )}

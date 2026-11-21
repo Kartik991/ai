@@ -146,14 +146,120 @@ export interface TimetableValidationResult {
   softScore: number; // 0 to 100 (100 = perfect compliance)
 }
 
+export type AlgorithmType = 'backtracking' | 'min-conflicts';
+
+export interface MinConflictsMetrics {
+  executionTimeMs: number;
+  totalIterations: number;
+  totalRestarts: number;
+  initialConflictsCount: number;
+  finalConflictsCount: number;
+  bestConflictsCount: number;
+  variablesExaminedCount: number;
+  candidateValuesEvaluatedCount: number;
+  successfulRepairsCount: number;
+  stagnationEventsCount: number;
+  solutionStatus: 'SUCCESS' | 'ITERATION_LIMIT_EXCEEDED' | 'TIMEOUT' | 'UNRESOLVED_CONFLICTS';
+  variablesCount: number;
+}
+
+export interface MinConflictsOptions {
+  maxIterations: number;
+  maxRestarts: number;
+  stagnationThreshold: number;
+  randomSeed?: number;
+  initStrategy: 'random' | 'greedy';
+  optimizeSoftPreferences: boolean;
+  timeLimitMs: number;
+  recordTrace: boolean;
+  batchIds?: string[];
+}
+
+export type MinConflictsTraceEventType =
+  | 'INITIAL_ASSIGNMENT_CREATED'
+  | 'CONFLICTS_DETECTED'
+  | 'CONFLICTING_VARIABLE_SELECTED'
+  | 'CANDIDATE_EVALUATION_STARTED'
+  | 'CANDIDATE_EVALUATED'
+  | 'MINIMUM_CONFLICT_VALUE_SELECTED'
+  | 'ASSIGNMENT_UPDATED'
+  | 'CONFLICT_COUNT_UPDATED'
+  | 'STAGNATION_DETECTED'
+  | 'RANDOM_RESTART'
+  | 'SOLUTION_FOUND'
+  | 'SEARCH_FAILED';
+
+export interface CandidateEvaluation {
+  value: DomainValue;
+  conflictScore: number;
+  breakdown: string[];
+}
+
+export interface MinConflictsTraceEvent {
+  id: string;
+  stepNumber: number;
+  iteration: number;
+  restartCount: number;
+  type: MinConflictsTraceEventType;
+  timestamp: number;
+  variableId?: string;
+  currentValue?: DomainValue;
+  selectedCandidateValue?: DomainValue;
+  conflictingVariableIds: string[];
+  totalConflicts: number;
+  bestConflicts: number;
+  evaluatedCandidates?: CandidateEvaluation[];
+  reason?: string;
+  details?: Record<string, unknown>;
+  assignmentsSnapshot: TimetableAssignment[];
+}
+
 export interface Timetable {
   id: string;
   name: string;
   createdAt: string;
   batchIds: string[];
+  algorithmUsed: AlgorithmType;
   assignments: TimetableAssignment[];
   validation: TimetableValidationResult;
-  metrics: SearchMetrics;
+  metrics: SearchMetrics | MinConflictsMetrics;
+  minConflictsMetrics?: MinConflictsMetrics;
+  backtrackingMetrics?: SearchMetrics;
+}
+
+// ----------------------------------------------------------------------------
+// Algorithm Comparison Types
+// ----------------------------------------------------------------------------
+
+export interface ComparisonRun {
+  algorithm: AlgorithmType;
+  name: string;
+  seed?: number;
+  success: boolean;
+  executionTimeMs: number;
+  primaryWorkMetric: number; // Explored Nodes (BT) vs Total Iterations (MC)
+  primaryWorkLabel: string;
+  secondaryWorkMetric: number; // Backtracks (BT) vs Restarts (MC)
+  secondaryWorkLabel: string;
+  constraintChecks: number;
+  hardViolations: number;
+  softScore: number;
+  timetable: Timetable | null;
+  status: string;
+}
+
+export interface AlgorithmComparisonResult {
+  timestamp: string;
+  datasetName: string;
+  variablesCount: number;
+  backtrackingRun: ComparisonRun;
+  minConflictsRuns: ComparisonRun[];
+  summary: {
+    fasterAlgorithm: AlgorithmType | 'tie';
+    higherQualityAlgorithm: AlgorithmType | 'tie';
+    timeDifferenceMs: number;
+    notes: string[];
+  };
 }
 
 // ----------------------------------------------------------------------------
